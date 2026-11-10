@@ -20,7 +20,9 @@ init(Req0, Ruta) ->
 manejar(<<"GET">>, medicos, Req) ->
     responder(200, #{medicos => p43_clinica:medicos()}, Req);
 manejar(<<"GET">>, citas, Req) ->
-    responder(200, #{citas => p43_clinica:citas()}, Req);
+    Citas = [cita_json(Info) || Id <- p43_clinica:citas(),
+                                {ok, Info} <- [p43_clinica:cita(Id)]],
+    responder(200, #{citas => Citas}, Req);
 manejar(<<"POST">>, citas, Req0) ->
     case leer_json(Req0) of
         {ok, Cuerpo, Req} -> crear_cita(Cuerpo, Req);
