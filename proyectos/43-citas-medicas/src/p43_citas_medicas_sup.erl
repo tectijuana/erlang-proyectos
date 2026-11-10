@@ -7,9 +7,10 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
-%% rest_for_one: la clinica depende de los dos supervisores de
-%% arriba. Si cae uno de ellos, la clinica se reinicia y vuelve a
-%% sembrar a los medicos.
+%% rest_for_one: lo que viene despues depende de lo anterior.
+%% Si cae un supervisor o los recordatorios, la clinica se reinicia
+%% y vuelve a sembrar a los medicos. Los recordatorios sobreviven
+%% porque viven en disco (DETS).
 init([]) ->
     Children = [
         #{id => p43_citas_sup,
@@ -18,6 +19,9 @@ init([]) ->
         #{id => p43_medicos_sup,
           start => {p43_medicos_sup, start_link, []},
           restart => permanent, shutdown => infinity, type => supervisor},
+        #{id => p43_recordatorios,
+          start => {p43_recordatorios, start_link, []},
+          restart => permanent, shutdown => 5000, type => worker},
         #{id => p43_clinica,
           start => {p43_clinica, start_link, []},
           restart => permanent, shutdown => 5000, type => worker}

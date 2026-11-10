@@ -26,3 +26,4 @@ opencode.json
 .cursor/
 bitacora/
 .obsidian/
+*.dets

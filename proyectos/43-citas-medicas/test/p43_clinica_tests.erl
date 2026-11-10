@@ -1,51 +1,69 @@
 -module(p43_clinica_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+%% Fecha futura: asi los recordatorios si se programan.
+-define(F, {2030, 1, 15}).
+
 clinica_test_() ->
     {foreach,
      fun() ->
+             Archivo = "/tmp/p43_clin_" ++
+                       integer_to_list(erlang:unique_integer([positive])) ++ ".dets",
+             application:set_env(p43_citas_medicas, recordatorios_archivo, Archivo),
              {ok, Sup} = p43_citas_medicas_sup:start_link(),
              unlink(Sup),
              timer:sleep(100),
-             Sup
+             {Sup, Archivo}
      end,
-     fun(Sup) ->
+     fun({Sup, Archivo}) ->
              exit(Sup, shutdown),
-             timer:sleep(100)
+             timer:sleep(100),
+             file:delete(Archivo)
      end,
      [fun(_) -> ?_test(agenda_y_consulta()) end,
       fun(_) -> ?_test(traslape_no_crea_cita()) end,
+      fun(_) -> ?_test(mismo_horario_otro_dia()) end,
       fun(_) -> ?_test(cancelar_libera_hueco()) end,
       fun(_) -> ?_test(no_show_libera_hueco()) end,
       fun(_) -> ?_test(simultaneas_en_la_clinica()) end,
-      fun(_) -> ?_test(cita_caida_libera_hueco()) end]}.
+      fun(_) -> ?_test(cita_caida_libera_hueco()) end,
+      fun(_) -> ?_test(fecha_invalida()) end,
+      fun(_) -> ?_test(recordatorios_se_programan_y_se_cancelan()) end,
+      fun(_) -> ?_test(fecha_pasada_sin_recordatorios()) end]}.
 
 agenda_y_consulta() ->
-    ?assertEqual(ok, p43_clinica:agendar(c1, <<"Ana">>, 1, 540, 570)),
+    ?assertEqual(ok, p43_clinica:agendar(c1, <<"Ana">>, 1, ?F, 540, 570)),
     {ok, Info} = p43_clinica:cita(c1),
     ?assertEqual(agendada, maps:get(estado, Info)),
+    ?assertEqual(?F, maps:get(fecha, Info)),
     ?assertEqual(ok, p43_clinica:confirmar(c1)),
     ?assertEqual(ok, p43_clinica:atender(c1)),
     {ok, Info2} = p43_clinica:cita(c1),
     ?assertEqual(atendida, maps:get(estado, Info2)).
 
 traslape_no_crea_cita() ->
-    ok = p43_clinica:agendar(c1, <<"Ana">>, 1, 540, 570),
+    ok = p43_clinica:agendar(c1, <<"Ana">>, 1, ?F, 540, 570),
     ?assertEqual({error, horario_ocupado},
-                 p43_clinica:agendar(c2, <<"Luis">>, 1, 555, 600)),
+                 p43_clinica:agendar(c2, <<"Luis">>, 1, ?F, 555, 600)),
     ?assertEqual({error, no_existe}, p43_clinica:cita(c2)),
     ?assertEqual([c1], p43_clinica:citas()),
     %% Otro medico, mismo horario: si se puede.
-    ?assertEqual(ok, p43_clinica:agendar(c3, <<"Luis">>, 2, 540, 570)).
+    ?assertEqual(ok, p43_clinica:agendar(c3, <<"Luis">>, 2, ?F, 540, 570)).
+
+mismo_horario_otro_dia() ->
+    ok = p43_clinica:agendar(c1, <<"Ana">>, 1, ?F, 540, 570),
+    ?assertEqual(ok, p43_clinica:agendar(c2, <<"Luis">>, 1, {2030, 1, 16}, 540, 570)),
+    ?assertEqual({ok, [{540, 570, c1}]}, p43_clinica:agenda(1, ?F)),
+    ?assertEqual({ok, [{540, 570, c2}]}, p43_clinica:agenda(1, {2030, 1, 16})).
 
 cancelar_libera_hueco() ->
-    ok = p43_clinica:agendar(c1, <<"Ana">>, 1, 540, 570),
+    ok = p43_clinica:agendar(c1, <<"Ana">>, 1, ?F, 540, 570),
     ?assertEqual(ok, p43_clinica:cancelar(c1)),
     ?assertEqual({ok, []}, p43_clinica:agenda(1)),
-    ?assertEqual(ok, p43_clinica:agendar(c2, <<"Luis">>, 1, 540, 570)).
+    ?assertEqual(ok, p43_clinica:agendar(c2, <<"Luis">>, 1, ?F, 540, 570)).
 
 no_show_libera_hueco() ->
-    ok = p43_clinica:agendar(c1, <<"Ana">>, 1, 540, 570),
+    ok = p43_clinica:agendar(c1, <<"Ana">>, 1, ?F, 540, 570),
     ?assertEqual(ok, p43_clinica:no_show(c1)),
     ?assertEqual({ok, []}, p43_clinica:agenda(1)).
 
@@ -53,7 +71,7 @@ simultaneas_en_la_clinica() ->
     Padre = self(),
     N = 30,
     [spawn(fun() ->
-                   Padre ! {r, p43_clinica:agendar(I, <<"P">>, 1, 540, 570)}
+                   Padre ! {r, p43_clinica:agendar(I, <<"P">>, 1, ?F, 540, 570)}
            end) || I <- lists:seq(1, N)],
     Rs = [receive {r, R} -> R after 2000 -> timeout end
           || _ <- lists:seq(1, N)],
@@ -62,10 +80,28 @@ simultaneas_en_la_clinica() ->
 
 %% Prueba de caos: matar una cita a proposito.
 cita_caida_libera_hueco() ->
-    ok = p43_clinica:agendar(c1, <<"Ana">>, 1, 540, 570),
+    ok = p43_clinica:agendar(c1, <<"Ana">>, 1, ?F, 540, 570),
     [{c1, CPid, 1}] = ets:lookup(p43_citas_tab, c1),
     exit(CPid, kill),
     timer:sleep(100),
     ?assertEqual({error, no_existe}, p43_clinica:cita(c1)),
     ?assertEqual({ok, []}, p43_clinica:agenda(1)),
-    ?assertEqual(ok, p43_clinica:agendar(c2, <<"Luis">>, 1, 540, 570)).
+    ?assertEqual([], p43_recordatorios:estado(c1)),
+    ?assertEqual(ok, p43_clinica:agendar(c2, <<"Luis">>, 1, ?F, 540, 570)).
+
+fecha_invalida() ->
+    ?assertEqual({error, fecha_invalida},
+                 p43_clinica:agendar(c1, <<"Ana">>, 1, {2030, 2, 30}, 540, 570)),
+    ?assertEqual({error, fecha_invalida},
+                 p43_clinica:agendar(c1, <<"Ana">>, 1, manana, 540, 570)),
+    ?assertEqual([], p43_clinica:citas()).
+
+recordatorios_se_programan_y_se_cancelan() ->
+    ok = p43_clinica:agendar(c1, <<"Ana">>, 1, ?F, 540, 570),
+    ?assertEqual([{h2, pendiente}, {h48, pendiente}], p43_recordatorios:estado(c1)),
+    ok = p43_clinica:cancelar(c1),
+    ?assertEqual([], p43_recordatorios:estado(c1)).
+
+fecha_pasada_sin_recordatorios() ->
+    ok = p43_clinica:agendar(c1, <<"Ana">>, 1, {2020, 1, 15}, 540, 570),
+    ?assertEqual([], p43_recordatorios:estado(c1)).
