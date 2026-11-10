@@ -2,13 +2,22 @@
 -include_lib("eunit/include/eunit.hrl").
 
 arbol_de_supervision_test_() ->
-  {setup,
-   fun() -> {ok, Pid} = p43_citas_medicas_sup:start_link(), Pid end,
-   fun(Pid) ->
-     unlink(Pid),
-     exit(Pid, shutdown)
-   end,
-   fun(_) ->
-     [?_assertEqual(pong, p43_citas_medicas_server:ping()),
-      ?_assert(is_map(p43_citas_medicas_server:state()))]
-   end}.
+    {setup,
+     fun() ->
+             {ok, Sup} = p43_citas_medicas_sup:start_link(),
+             unlink(Sup),
+             timer:sleep(100),
+             Sup
+     end,
+     fun(Sup) ->
+             exit(Sup, shutdown),
+             timer:sleep(100)
+     end,
+     fun(Sup) ->
+             Hijos = [Id || {Id, _, _, _} <- supervisor:which_children(Sup)],
+             [?_assert(is_pid(whereis(p43_citas_sup))),
+              ?_assert(is_pid(whereis(p43_medicos_sup))),
+              ?_assert(is_pid(whereis(p43_clinica))),
+              ?_assertEqual(3, length(Hijos)),
+              ?_assertEqual(10, length(p43_clinica:medicos()))]
+     end}.
